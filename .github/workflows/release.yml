@@ -37,8 +37,14 @@ jobs:
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build -o "dist/omnipulse-agent-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" .
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > sha256sums.txt
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
           files: dist/*

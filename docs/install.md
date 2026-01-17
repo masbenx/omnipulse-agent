@@ -27,6 +27,16 @@ Invoke-WebRequest -Headers @{ Authorization = "token $Token" } `
 Catatan:
 - Jika repo public, hapus header Authorization.
 - Ganti `linux-amd64` sesuai arsitektur (`linux-arm64`, `darwin-amd64`, `darwin-arm64`).
+- Verifikasi checksum: unduh `sha256sums.txt` dari release yang sama dan cocokkan hash.
+
+Contoh verifikasi checksum:
+```bash
+VERSION=v1.0.0
+curl -L -H "Authorization: token $GITHUB_TOKEN" \
+  "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/sha256sums.txt" \
+  -o sha256sums.txt
+sha256sum -c sha256sums.txt --ignore-missing
+```
 
 ## Opsi B: Installer script (release)
 ### Linux/macOS (install.sh)

@@ -17,6 +17,7 @@ curl -L \
   -o omnipulse-agent
 chmod +x omnipulse-agent
 ```
+Verifikasi checksum: unduh `sha256sums.txt` dari release yang sama lalu cocokkan hash.
 
 ## Installer script (release)
 ```bash
