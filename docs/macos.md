@@ -1,15 +1,28 @@
 # OmniPulse Agent - macOS
 
-## Opsi 1: Installer script
+## Opsi A: Install dari release asset
 ```bash
-curl -fsSL https://raw.githubusercontent.com/masbenx/omnipulse-agent/main/scripts/install.sh | sudo bash -s -- --source=git --version=main
+VERSION=v1.0.0
+curl -L \
+  -H "Authorization: token $GITHUB_TOKEN" \
+  "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/omnipulse-agent-darwin-amd64" \
+  -o omnipulse-agent
+chmod +x omnipulse-agent
+sudo install -m 0755 omnipulse-agent /usr/local/bin/omnipulse-agent
 ```
 
-## Opsi 2: Build from source
+## Opsi B: Installer script (release)
 ```bash
-git clone https://github.com/masbenx/omnipulse-agent.git
+curl -fsSL https://raw.githubusercontent.com/masbenx/omnipulse-agent/main/scripts/install.sh | \
+  sudo bash -s -- --source=release --version=latest --token "$GITHUB_TOKEN"
+```
+
+## Opsi C: Build from source (release tag)
+```bash
+git clone --branch v1.0.0 https://github.com/masbenx/omnipulse-agent.git
 cd omnipulse-agent
 CGO_ENABLED=0 go build -o omnipulse-agent .
+sudo install -m 0755 omnipulse-agent /usr/local/bin/omnipulse-agent
 ```
 
 ## Menjalankan (foreground)
@@ -21,4 +34,6 @@ INTERVAL_SECONDS=10 \
 ```
 
 Catatan:
+- Jika repo public, hapus header Authorization.
+- Untuk macOS ARM64, gunakan asset `omnipulse-agent-darwin-arm64`.
 - Integrasi service (launchd) akan disediakan pada milestone B7a.

@@ -2,25 +2,35 @@
 
 Panduan ringkas untuk VM Hostinger berbasis Ubuntu/Debian.
 
-## 1) Build binary di lokal
+## Opsi A: Download release asset
+```bash
+VERSION=v1.0.0
+curl -L \
+  -H "Authorization: token $GITHUB_TOKEN" \
+  "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/omnipulse-agent-linux-amd64" \
+  -o omnipulse-agent
+chmod +x omnipulse-agent
+```
+
+## Opsi B: Build binary di lokal dan upload
 ```bash
 cd /path/to/omnipulse-agent
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o omnipulse-agent .
 ```
 Jika VM kamu ARM64, ganti `GOARCH=arm64`.
 
-## 2) Upload ke VM
+### Upload ke VM
 ```bash
 scp ./omnipulse-agent root@<VM_IP>:/tmp/omnipulse-agent
 ```
 
-## 3) Pasang binary di VM
+## Pasang binary di VM
 ```bash
 ssh root@<VM_IP>
 sudo install -m 0755 /tmp/omnipulse-agent /usr/local/bin/omnipulse-agent
 ```
 
-## 4) Siapkan user + env + systemd
+## Siapkan user + env + systemd
 Ikuti langkah di `docs/linux.md` untuk:
 - membuat user `omnipulse`
 - membuat `/etc/omnipulse-agent.env`
@@ -28,14 +38,14 @@ Ikuti langkah di `docs/linux.md` untuk:
 
 Pastikan `OMNIPULSE_URL` mengarah ke domain backend kamu (HTTPS).
 
-## 5) Start dan cek status
+## Start dan cek status
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now omnipulse-agent
 sudo systemctl status omnipulse-agent --no-pager
 ```
 
-## 6) Verifikasi di backend
+## Verifikasi di backend
 - Cek tabel `server_metrics` di Postgres
 - Cek realtime WS `metrics:server:<id>`
 
