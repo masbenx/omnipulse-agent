@@ -1,0 +1,13 @@
+# binaries
+omnipulse-agent
+omnipulse-agent.exe
+
+# build artifacts
+*.out
+*.log
+
+# env
+*.env
+
+# misc
+.DS_Store
