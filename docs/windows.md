@@ -1,13 +1,22 @@
 # OmniPulse Agent - Windows
 
-## Opsi 1: Installer script (PowerShell)
+## Opsi A: Install dari release asset
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Source git -Version main
+$Version="v1.0.0"
+$Token=$env:GITHUB_TOKEN
+Invoke-WebRequest -Headers @{ Authorization = "token $Token" } `
+  -Uri "https://github.com/masbenx/omnipulse-agent/releases/download/$Version/omnipulse-agent-windows-amd64.exe" `
+  -OutFile .\omnipulse-agent.exe
 ```
 
-## Opsi 2: Build from source
+## Opsi B: Installer script (release)
 ```powershell
-git clone https://github.com/masbenx/omnipulse-agent.git
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Source release -Version latest -Token $env:GITHUB_TOKEN
+```
+
+## Opsi C: Build from source (release tag)
+```powershell
+git clone --branch v1.0.0 https://github.com/masbenx/omnipulse-agent.git
 cd omnipulse-agent
 $env:CGO_ENABLED="0"
 go build -o omnipulse-agent.exe .
@@ -22,4 +31,5 @@ $env:INTERVAL_SECONDS="10"
 ```
 
 Catatan:
+- Jika repo public, hapus header Authorization.
 - Integrasi Windows Service akan disediakan pada milestone B7a.
