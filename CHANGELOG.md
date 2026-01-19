@@ -7,6 +7,7 @@
 
 ### Changed
 - CLI kini mendukung subcommand `run`.
+- Contoh penggunaan foreground diperjelas dengan `run`.
 
 ### Fixed
 - -
