@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kardianos/service"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -42,13 +43,150 @@ type NetTotals struct {
 	Out uint64
 }
 
+const (
+	serviceName        = "omnipulse-agent"
+	serviceDisplayName = "OmniPulse Agent"
+	serviceDescription = "OmniPulse Agent metrics collector"
+)
+
+type program struct {
+	cfg    Config
+	logger *log.Logger
+	stopCh chan struct{}
+}
+
+func (p *program) Start(s service.Service) error {
+	if p.stopCh == nil {
+		p.stopCh = make(chan struct{})
+	}
+	go runAgent(p.cfg, p.logger, p.stopCh)
+	return nil
+}
+
+func (p *program) Stop(s service.Service) error {
+	if p.stopCh != nil {
+		close(p.stopCh)
+	}
+	return nil
+}
+
 func main() {
-	cfg, err := loadConfig()
-	if err != nil {
-		log.Fatal(err)
+	logger := log.New(os.Stdout, "omnipulse-agent: ", log.LstdFlags)
+	if len(os.Args) > 1 {
+		cmd := os.Args[1]
+		if cmd == "run" {
+			cfg, err := loadConfig(os.Args[2:])
+			if err != nil {
+				logger.Fatal(err)
+			}
+			runAgent(cfg, logger, nil)
+			return
+		}
+		if isServiceCommand(cmd) {
+			if err := handleServiceCommand(cmd, os.Args[2:], logger); err != nil {
+				logger.Fatal(err)
+			}
+			return
+		}
 	}
 
-	logger := log.New(os.Stdout, "omnipulse-agent: ", log.LstdFlags)
+	cfg, err := loadConfig(os.Args[1:])
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	if service.Interactive() {
+		runAgent(cfg, logger, nil)
+		return
+	}
+
+	prg := &program{cfg: cfg, logger: logger, stopCh: make(chan struct{})}
+	svcCfg := &service.Config{
+		Name:        serviceName,
+		DisplayName: serviceDisplayName,
+		Description: serviceDescription,
+	}
+	svc, err := service.New(prg, svcCfg)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	if err := svc.Run(); err != nil {
+		logger.Fatal(err)
+	}
+}
+
+func isServiceCommand(cmd string) bool {
+	switch cmd {
+	case "install", "start", "stop", "restart", "uninstall":
+		return true
+	default:
+		return false
+	}
+}
+
+func handleServiceCommand(cmd string, args []string, logger *log.Logger) error {
+	cfg, err := buildServiceConfig(cmd, args)
+	if err != nil {
+		return err
+	}
+
+	prg := &program{logger: logger, stopCh: make(chan struct{})}
+	if cfg.program != nil {
+		prg = cfg.program
+	}
+
+	svc, err := service.New(prg, cfg.svc)
+	if err != nil {
+		return err
+	}
+
+	return service.Control(svc, cmd)
+}
+
+type serviceConfig struct {
+	svc     *service.Config
+	program *program
+}
+
+func buildServiceConfig(cmd string, args []string) (*serviceConfig, error) {
+	svcCfg := &service.Config{
+		Name:        serviceName,
+		DisplayName: serviceDisplayName,
+		Description: serviceDescription,
+	}
+
+	if cmd == "install" {
+		cfg, err := loadConfig(args)
+		if err != nil {
+			return nil, err
+		}
+		svcCfg.Arguments = buildRunArgs(cfg)
+		return &serviceConfig{
+			svc: svcCfg,
+			program: &program{
+				cfg:    cfg,
+				logger: log.New(os.Stdout, "omnipulse-agent: ", log.LstdFlags),
+				stopCh: make(chan struct{}),
+			},
+		}, nil
+	}
+
+	return &serviceConfig{svc: svcCfg}, nil
+}
+
+func buildRunArgs(cfg Config) []string {
+	args := []string{
+		"run",
+		"--url", cfg.BaseURL,
+		"--token", cfg.Token,
+	}
+	if cfg.Interval > 0 {
+		args = append(args, "--interval", strconv.Itoa(int(cfg.Interval.Seconds())))
+	}
+	return args
+}
+
+func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	logger.Printf("starting interval=%s url=%s", cfg.Interval, cfg.BaseURL)
 
 	client := &http.Client{Timeout: cfg.Timeout}
@@ -57,6 +195,15 @@ func main() {
 	failCount := 0
 
 	for {
+		if stopCh != nil {
+			select {
+			case <-stopCh:
+				logger.Println("stopping")
+				return
+			default:
+			}
+		}
+
 		started := time.Now()
 		payload, netTotals, netOK, warn := collectMetrics(prevNet, hasPrev)
 		if warn != nil {
@@ -76,17 +223,35 @@ func main() {
 
 		sleepFor := nextSleep(cfg.Interval, failCount)
 		elapsed := time.Since(started)
-		if elapsed < sleepFor {
-			time.Sleep(sleepFor - elapsed)
+		wait := sleepFor - elapsed
+		if wait <= 0 {
+			continue
+		}
+		if stopCh == nil {
+			time.Sleep(wait)
+			continue
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-stopCh:
+			timer.Stop()
+			logger.Println("stopping")
+			return
+		case <-timer.C:
 		}
 	}
 }
 
-func loadConfig() (Config, error) {
-	flagURL := flag.String("url", "", "Base URL (env OMNIPULSE_URL)")
-	flagToken := flag.String("token", "", "Agent token (env AGENT_TOKEN)")
-	flagInterval := flag.Int("interval", 0, "Interval in seconds (env INTERVAL_SECONDS)")
-	flag.Parse()
+func loadConfig(args []string) (Config, error) {
+	fs := flag.NewFlagSet("omnipulse-agent", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	flagURL := fs.String("url", "", "Base URL (env OMNIPULSE_URL)")
+	flagToken := fs.String("token", "", "Agent token (env AGENT_TOKEN)")
+	flagInterval := fs.Int("interval", 0, "Interval in seconds (env INTERVAL_SECONDS)")
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
 
 	baseURL := strings.TrimSpace(firstNonEmpty(*flagURL, os.Getenv("OMNIPULSE_URL")))
 	token := strings.TrimSpace(firstNonEmpty(*flagToken, os.Getenv("AGENT_TOKEN")))

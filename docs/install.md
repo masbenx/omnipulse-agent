@@ -72,4 +72,17 @@ Catatan:
 - Installer release tidak membutuhkan Go di host target.
 - Build from source membutuhkan Go 1.22+.
 - Untuk service Linux (systemd) lihat `docs/linux.md`.
-- Untuk macOS/Windows, service manager disiapkan di milestone B7a.
+- Untuk macOS/Windows, gunakan perintah service bawaan agent.
+
+## Service (macOS/Windows)
+Install service dengan membawa konfigurasi (URL/token/interval):
+```bash
+sudo omnipulse-agent install --url "https://monitor.company.com" --token "AGENT_TOKEN" --interval 10
+sudo omnipulse-agent start
+```
+
+Stop/uninstall:
+```bash
+sudo omnipulse-agent stop
+sudo omnipulse-agent uninstall
+```

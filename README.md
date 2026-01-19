@@ -30,7 +30,13 @@ curl -fsSL https://raw.githubusercontent.com/masbenx/omnipulse-agent/main/script
 OMNIPULSE_URL=https://monitor.company.com \
 AGENT_TOKEN=replace-with-agent-token \
 INTERVAL_SECONDS=10 \
-./omnipulse-agent
+./omnipulse-agent run
+```
+
+## Service (macOS/Windows via kardianos/service)
+```bash
+sudo omnipulse-agent install --url "https://monitor.company.com" --token "AGENT_TOKEN" --interval 10
+sudo omnipulse-agent start
 ```
 
 ## Dokumentasi

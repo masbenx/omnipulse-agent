@@ -27,9 +27,24 @@ go build -o omnipulse-agent.exe .
 $env:OMNIPULSE_URL="https://monitor.company.com"
 $env:AGENT_TOKEN="replace-with-agent-token"
 $env:INTERVAL_SECONDS="10"
-.\omnipulse-agent.exe
+.\omnipulse-agent.exe run
+```
+
+## Service (Windows Service via kardianos/service)
+Jalankan PowerShell sebagai Administrator.
+
+Install service:
+```powershell
+.\omnipulse-agent.exe install --url "https://monitor.company.com" --token "AGENT_TOKEN" --interval 10
+.\omnipulse-agent.exe start
+```
+
+Stop/uninstall:
+```powershell
+.\omnipulse-agent.exe stop
+.\omnipulse-agent.exe uninstall
 ```
 
 Catatan:
 - Jika repo public, hapus header Authorization.
-- Integrasi Windows Service akan disediakan pada milestone B7a.
+- Token sensitif; hindari menyimpan di history PowerShell.
