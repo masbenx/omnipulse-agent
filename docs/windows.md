@@ -27,7 +27,7 @@ go build -o omnipulse-agent.exe .
 $env:OMNIPULSE_URL="https://monitor.company.com"
 $env:AGENT_TOKEN="replace-with-agent-token"
 $env:INTERVAL_SECONDS="10"
-.\omnipulse-agent.exe
+.\omnipulse-agent.exe run
 ```
 
 ## Service (Windows Service via kardianos/service)

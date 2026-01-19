@@ -30,7 +30,7 @@ sudo install -m 0755 omnipulse-agent /usr/local/bin/omnipulse-agent
 OMNIPULSE_URL=https://monitor.company.com \
 AGENT_TOKEN=replace-with-agent-token \
 INTERVAL_SECONDS=10 \
-./omnipulse-agent
+./omnipulse-agent run
 ```
 
 ## Service (launchd via kardianos/service)
