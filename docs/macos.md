@@ -33,7 +33,20 @@ INTERVAL_SECONDS=10 \
 ./omnipulse-agent
 ```
 
+## Service (launchd via kardianos/service)
+Install service:
+```bash
+sudo omnipulse-agent install --url "https://monitor.company.com" --token "AGENT_TOKEN" --interval 10
+sudo omnipulse-agent start
+```
+
+Stop/uninstall:
+```bash
+sudo omnipulse-agent stop
+sudo omnipulse-agent uninstall
+```
+
 Catatan:
 - Jika repo public, hapus header Authorization.
 - Untuk macOS ARM64, gunakan asset `omnipulse-agent-darwin-arm64`.
-- Integrasi service (launchd) akan disediakan pada milestone B7a.
+- Token sensitif; hindari menyimpan di shell history.
