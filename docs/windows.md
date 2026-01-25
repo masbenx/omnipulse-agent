@@ -2,7 +2,7 @@
 
 ## Opsi A: Install dari release asset
 ```powershell
-$Version="v1.0.0"
+$Version="v1.1.0"
 $Token=$env:GITHUB_TOKEN
 Invoke-WebRequest -Headers @{ Authorization = "token $Token" } `
   -Uri "https://github.com/masbenx/omnipulse-agent/releases/download/$Version/omnipulse-agent-windows-amd64.exe" `
@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Source release -
 
 ## Opsi C: Build from source (release tag)
 ```powershell
-git clone --branch v1.0.0 https://github.com/masbenx/omnipulse-agent.git
+git clone --branch v1.1.0 https://github.com/masbenx/omnipulse-agent.git
 cd omnipulse-agent
 $env:CGO_ENABLED="0"
 go build -o omnipulse-agent.exe .
