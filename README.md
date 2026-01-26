@@ -10,7 +10,7 @@ Gunakan environment variables:
 
 ## Instalasi (release asset)
 ```bash
-VERSION=v1.1.0
+VERSION=v1.2.1
 curl -L \
   -H "Authorization: token $GITHUB_TOKEN" \
   "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/omnipulse-agent-linux-amd64" \
