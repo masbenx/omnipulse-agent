@@ -2,7 +2,7 @@
 
 ## Opsi A: Install dari release asset
 ```bash
-VERSION=v1.0.0
+VERSION=v1.1.0
 curl -L \
   -H "Authorization: token $GITHUB_TOKEN" \
   "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/omnipulse-agent-darwin-amd64" \
@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/masbenx/omnipulse-agent/main/script
 
 ## Opsi C: Build from source (release tag)
 ```bash
-git clone --branch v1.0.0 https://github.com/masbenx/omnipulse-agent.git
+git clone --branch v1.1.0 https://github.com/masbenx/omnipulse-agent.git
 cd omnipulse-agent
 CGO_ENABLED=0 go build -o omnipulse-agent .
 sudo install -m 0755 omnipulse-agent /usr/local/bin/omnipulse-agent

@@ -7,7 +7,7 @@ Untuk repo private, tambahkan header Authorization token.
 
 ### Linux/macOS
 ```bash
-VERSION=v1.0.0
+VERSION=v1.1.0
 curl -L \
   -H "Authorization: token $GITHUB_TOKEN" \
   "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/omnipulse-agent-linux-amd64" \
@@ -17,7 +17,7 @@ chmod +x omnipulse-agent
 
 ### Windows
 ```powershell
-$Version="v1.0.0"
+$Version="v1.1.0"
 $Token=$env:GITHUB_TOKEN
 Invoke-WebRequest -Headers @{ Authorization = "token $Token" } `
   -Uri "https://github.com/masbenx/omnipulse-agent/releases/download/$Version/omnipulse-agent-windows-amd64.exe" `
@@ -31,7 +31,7 @@ Catatan:
 
 Contoh verifikasi checksum:
 ```bash
-VERSION=v1.0.0
+VERSION=v1.1.0
 curl -L -H "Authorization: token $GITHUB_TOKEN" \
   "https://github.com/masbenx/omnipulse-agent/releases/download/${VERSION}/sha256sums.txt" \
   -o sha256sums.txt
@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Source release -
 ## Opsi C: Build from source (release tag)
 ### curl
 ```bash
-VERSION=v1.0.0
+VERSION=v1.1.0
 curl -L "https://github.com/masbenx/omnipulse-agent/archive/refs/tags/${VERSION}.tar.gz" -o omnipulse-agent.tar.gz
 mkdir -p omnipulse-agent-src
  tar -xzf omnipulse-agent.tar.gz -C omnipulse-agent-src --strip-components=1
@@ -63,7 +63,7 @@ CGO_ENABLED=0 go build -o omnipulse-agent .
 
 ### git
 ```bash
-git clone --branch v1.0.0 https://github.com/masbenx/omnipulse-agent.git
+git clone --branch v1.1.0 https://github.com/masbenx/omnipulse-agent.git
 cd omnipulse-agent
 CGO_ENABLED=0 go build -o omnipulse-agent .
 ```

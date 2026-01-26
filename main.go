@@ -38,6 +38,21 @@ type MetricPayload struct {
 	NetOut    int64   `json:"net_out"`
 }
 
+type NetIfaceMetric struct {
+	Iface      string `json:"iface"`
+	BytesIn    int64  `json:"bytes_in"`
+	BytesOut   int64  `json:"bytes_out"`
+	PacketsIn  int64  `json:"packets_in"`
+	PacketsOut int64  `json:"packets_out"`
+	ErrorsIn   int64  `json:"errors_in"`
+	ErrorsOut  int64  `json:"errors_out"`
+}
+
+type NetIfacePayload struct {
+	Timestamp  string          `json:"timestamp"`
+	Interfaces []NetIfaceMetric `json:"interfaces"`
+}
+
 type NetTotals struct {
 	In  uint64
 	Out uint64
@@ -192,6 +207,8 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	client := &http.Client{Timeout: cfg.Timeout}
 	prevNet := NetTotals{}
 	hasPrev := false
+	prevIfaces := map[string]gnet.IOCountersStat{}
+	hasPrevIfaces := false
 	failCount := 0
 
 	for {
@@ -219,6 +236,20 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 				prevNet = netTotals
 				hasPrev = true
 			}
+		}
+
+		ifaceMetrics, nextIfaces, ifaceOK, ifaceWarn := collectIfaceMetrics(prevIfaces, hasPrevIfaces)
+		if ifaceWarn != nil {
+			logger.Printf("collect iface warning: %v", ifaceWarn)
+		}
+		if ifaceOK && len(ifaceMetrics) > 0 {
+			if err := sendNetworkMetrics(client, cfg, payload.Timestamp, ifaceMetrics); err != nil {
+				logger.Printf("network ingest failed: %v", err)
+			}
+		}
+		if len(nextIfaces) > 0 {
+			prevIfaces = nextIfaces
+			hasPrevIfaces = true
 		}
 
 		sleepFor := nextSleep(cfg.Interval, failCount)
@@ -360,6 +391,49 @@ func sendMetrics(client *http.Client, cfg Config, payload MetricPayload) error {
 	return nil
 }
 
+func sendNetworkMetrics(client *http.Client, cfg Config, timestamp string, ifaces []NetIfaceMetric) error {
+	if len(ifaces) == 0 {
+		return nil
+	}
+
+	payload := NetIfacePayload{
+		Timestamp:  timestamp,
+		Interfaces: ifaces,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	endpoint := cfg.BaseURL + "/api/ingest/server-network"
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", cfg.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, msg)
+	}
+
+	return nil
+}
+
 func readCPU() (float64, error) {
 	values, err := cpu.Percent(0, false)
 	if err != nil {
@@ -401,6 +475,60 @@ func readNetTotals() (NetTotals, bool, error) {
 		total.Out += stat.BytesSent
 	}
 	return total, true, nil
+}
+
+func collectIfaceMetrics(prev map[string]gnet.IOCountersStat, hasPrev bool) ([]NetIfaceMetric, map[string]gnet.IOCountersStat, bool, error) {
+	stats, err := gnet.IOCounters(true)
+	if err != nil {
+		return nil, prev, false, err
+	}
+
+	next := make(map[string]gnet.IOCountersStat, len(stats))
+	for _, stat := range stats {
+		if isLoopback(stat.Name) {
+			continue
+		}
+		next[stat.Name] = stat
+	}
+
+	if !hasPrev {
+		return nil, next, false, nil
+	}
+
+	metrics := make([]NetIfaceMetric, 0, len(next))
+	for name, curr := range next {
+		old, ok := prev[name]
+		if !ok {
+			continue
+		}
+		bytesIn, ok1 := safeDelta(old.BytesRecv, curr.BytesRecv)
+		bytesOut, ok2 := safeDelta(old.BytesSent, curr.BytesSent)
+		packetsIn, ok3 := safeDelta(old.PacketsRecv, curr.PacketsRecv)
+		packetsOut, ok4 := safeDelta(old.PacketsSent, curr.PacketsSent)
+		errorsIn, ok5 := safeDelta(old.Errin, curr.Errin)
+		errorsOut, ok6 := safeDelta(old.Errout, curr.Errout)
+		if !(ok1 && ok2 && ok3 && ok4 && ok5 && ok6) {
+			continue
+		}
+		metrics = append(metrics, NetIfaceMetric{
+			Iface:      name,
+			BytesIn:    bytesIn,
+			BytesOut:   bytesOut,
+			PacketsIn:  packetsIn,
+			PacketsOut: packetsOut,
+			ErrorsIn:   errorsIn,
+			ErrorsOut:  errorsOut,
+		})
+	}
+
+	return metrics, next, len(metrics) > 0, nil
+}
+
+func safeDelta(prev, curr uint64) (int64, bool) {
+	if curr < prev {
+		return 0, false
+	}
+	return int64(curr - prev), true
 }
 
 func isLoopback(name string) bool {
