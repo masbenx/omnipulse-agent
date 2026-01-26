@@ -1,5 +1,18 @@
 # Changelog
 
+## [v1.2.1] - 2026-01-26
+### Added
+- Update contoh versi release pada docs ke v1.2.1 (tanpa perubahan runtime).
+
+### Changed
+- -
+
+### Fixed
+- -
+
+### Security
+- -
+
 ## [v1.2.0] - 2026-01-26
 ### Added
 - Pengiriman metrik network per-interface ke `/api/ingest/server-network`.
