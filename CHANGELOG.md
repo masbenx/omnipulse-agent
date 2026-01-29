@@ -1,8 +1,6 @@
 # Changelog
 
-## [v1.0.0] - 2024-01-29
-### Added
-- Initial release of OmniPulse Agent (Go).
-- Basic metrics collection (CPU, Memory, Disk).
-- HTTP Ingest support.
-- CI/CD workflow (`release.yml`) for cross-platform build.
+## [v1.2.2] - 2024-01-29
+### Changed
+- Standardized release workflow with GitHub Actions (`release.yml`).
+- Added agent prompt context (`.github/prompts/omnipulse.prompt.md`).
