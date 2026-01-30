@@ -8,20 +8,36 @@ TOKEN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source=*)
+      SOURCE="${1#*=}"
+      shift
+      ;;
     --source)
-      SOURCE="$2"
+      SOURCE="${2:-}"
       shift 2
+      ;;
+    --version=*)
+      VERSION="${1#*=}"
+      shift
       ;;
     --version)
-      VERSION="$2"
+      VERSION="${2:-}"
       shift 2
+      ;;
+    --prefix=*)
+      PREFIX="${1#*=}"
+      shift
       ;;
     --prefix)
-      PREFIX="$2"
+      PREFIX="${2:-}"
       shift 2
       ;;
+    --token=*)
+      TOKEN="${1#*=}"
+      shift
+      ;;
     --token)
-      TOKEN="$2"
+      TOKEN="${2:-}"
       shift 2
       ;;
     *)
@@ -30,6 +46,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$TOKEN" ]]; then
+  echo "Error: --token is required" >&2
+  exit 1
+fi
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
