@@ -22,6 +22,8 @@ import (
 	gnet "github.com/shirou/gopsutil/v3/net"
 )
 
+var Version = "v1.2.14" // Will be updated by release script
+
 type Config struct {
 	BaseURL  string
 	Token    string
@@ -49,7 +51,7 @@ type NetIfaceMetric struct {
 }
 
 type NetIfacePayload struct {
-	Timestamp  string          `json:"timestamp"`
+	Timestamp  string           `json:"timestamp"`
 	Interfaces []NetIfaceMetric `json:"interfaces"`
 }
 
@@ -89,6 +91,10 @@ func main() {
 	logger := log.New(os.Stdout, "omnipulse-agent: ", log.LstdFlags)
 	if len(os.Args) > 1 {
 		cmd := os.Args[1]
+		if cmd == "version" || cmd == "-version" || cmd == "--version" || cmd == "-v" {
+			fmt.Printf("omnipulse-agent %s\n", Version)
+			return
+		}
 		if cmd == "run" {
 			cfg, err := loadConfig(os.Args[2:])
 			if err != nil {
@@ -202,7 +208,7 @@ func buildRunArgs(cfg Config) []string {
 }
 
 func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
-	logger.Printf("starting interval=%s url=%s", cfg.Interval, cfg.BaseURL)
+	logger.Printf("starting omnipulse-agent %s interval=%s url=%s", Version, cfg.Interval, cfg.BaseURL)
 
 	client := &http.Client{Timeout: cfg.Timeout}
 	prevNet := NetTotals{}
