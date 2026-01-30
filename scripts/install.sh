@@ -120,8 +120,15 @@ sudo install -m 0755 "$WORKDIR/$BINARY_NAME" "$PREFIX/$BINARY_NAME"
 # Auto-configure service (if on Linux)
 if [[ "$OS" == "linux" && -n "$URL" ]]; then
   echo "Registering systemd service..."
+  # If service already exists, uninstall it first to ensure config updates
+  if systemctl is-active --quiet "$BINARY_NAME" || systemctl is-enabled --quiet "$BINARY_NAME" 2>/dev/null; then
+    echo "Updating existing service..."
+    sudo "$PREFIX/$BINARY_NAME" stop 2>/dev/null || true
+    sudo "$PREFIX/$BINARY_NAME" uninstall 2>/dev/null || true
+  fi
+  
   sudo "$PREFIX/$BINARY_NAME" install --token "$TOKEN" --url "$URL"
-  sudo "$PREFIX/$BINARY_NAME" restart
+  sudo "$PREFIX/$BINARY_NAME" start
   echo "Service installed and started!"
 elif [[ "$OS" == "linux" ]]; then
   echo "Binary installed. To register as service, run:"
