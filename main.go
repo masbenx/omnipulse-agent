@@ -219,6 +219,13 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	hasPrevIfaces := false
 	failCount := 0
 
+	// Send facts on startup
+	sendFactsToBackend(client, cfg, logger)
+
+	// Track last facts sent time for periodic refresh
+	lastFactsSent := time.Now()
+	factsInterval := 5 * time.Minute
+
 	for {
 		if stopCh != nil {
 			select {
@@ -260,6 +267,12 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			hasPrevIfaces = true
 		}
 
+		// Periodically refresh facts (every 5 minutes)
+		if time.Since(lastFactsSent) >= factsInterval {
+			sendFactsToBackend(client, cfg, logger)
+			lastFactsSent = time.Now()
+		}
+
 		sleepFor := nextSleep(cfg.Interval, failCount)
 		elapsed := time.Since(started)
 		wait := sleepFor - elapsed
@@ -280,6 +293,57 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 		case <-timer.C:
 		}
 	}
+}
+
+// sendFactsToBackend collects and sends system facts
+func sendFactsToBackend(client *http.Client, cfg Config, logger *log.Logger) {
+	facts, err := collectFacts()
+	if err != nil {
+		logger.Printf("facts collect error: %v", err)
+		return
+	}
+
+	if err := sendFacts(client, cfg, facts); err != nil {
+		logger.Printf("facts ingest failed: %v", err)
+	} else {
+		logger.Printf("facts sent: hostname=%s os=%s cores=%d", facts.Hostname, facts.OSName, facts.CPUCores)
+	}
+}
+
+// sendFacts sends facts payload to backend
+func sendFacts(client *http.Client, cfg Config, facts FactsPayload) error {
+	body, err := json.Marshal(facts)
+	if err != nil {
+		return err
+	}
+
+	endpoint := cfg.BaseURL + "/api/ingest/server-facts"
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", cfg.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, msg)
+	}
+
+	return nil
 }
 
 func loadConfig(args []string) (Config, error) {
