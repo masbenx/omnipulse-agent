@@ -39,10 +39,12 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             EXT=".exe"
           fi
-          # Build binary with specific name
+          # Get version from tag
+          VERSION="${{ github.event.inputs.tag || github.ref_name }}"
+          # Build binary with specific name and inject version
           FILENAME="omnipulse-agent-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -o "dist/$FILENAME" .
+            go build -ldflags "-s -w -X main.Version=${VERSION}" -o "dist/$FILENAME" .
             
       - name: Upload artifact
         uses: actions/upload-artifact@v4

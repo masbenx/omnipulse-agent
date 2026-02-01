@@ -22,7 +22,9 @@ import (
 	gnet "github.com/shirou/gopsutil/v3/net"
 )
 
-var Version = "v1.2.14" // Will be updated by release script
+// Version is set at build time via ldflags:
+// go build -ldflags "-X main.Version=v1.2.42"
+var Version = "dev"
 
 type Config struct {
 	BaseURL  string
