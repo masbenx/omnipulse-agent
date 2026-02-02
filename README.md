@@ -39,6 +39,17 @@ sudo omnipulse-agent install --url "https://monitor.company.com" --token "AGENT_
 sudo omnipulse-agent start
 ```
 
+## Test Connection
+Verify backend connectivity before running:
+```bash
+omnipulse-agent test --url "https://monitor.company.com" --token "AGENT_TOKEN"
+```
+This will:
+1. Collect system metrics (CPU, Memory, Disk)
+2. Send metrics to backend
+3. Collect system facts (hostname, OS, etc.)
+4. Send facts to backend
+
 ## Dokumentasi
 - `docs/install.md`
 - `docs/linux.md`
