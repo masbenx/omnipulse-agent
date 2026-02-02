@@ -97,6 +97,10 @@ func main() {
 			fmt.Printf("omnipulse-agent %s\n", Version)
 			return
 		}
+		if cmd == "test" {
+			runTestCommand(os.Args[2:], logger)
+			return
+		}
 		if cmd == "run" {
 			cfg, err := loadConfig(os.Args[2:])
 			if err != nil {
@@ -136,6 +140,67 @@ func main() {
 	if err := svc.Run(); err != nil {
 		logger.Fatal(err)
 	}
+}
+
+// runTestCommand verifies connection to backend by sending test metrics
+func runTestCommand(args []string, logger *log.Logger) {
+	fmt.Println("🧪 OmniPulse Agent Connection Test")
+	fmt.Println("===================================")
+
+	cfg, err := loadConfig(args)
+	if err != nil {
+		fmt.Printf("❌ Configuration Error: %v\n", err)
+		fmt.Println("\nUsage: omnipulse-agent test --url <OMNIPULSE_URL> --token <AGENT_TOKEN>")
+		os.Exit(1)
+	}
+
+	fmt.Printf("📡 Backend URL: %s\n", cfg.BaseURL)
+	fmt.Printf("🔑 Token: %s***\n", cfg.Token[:min(8, len(cfg.Token))])
+	fmt.Println()
+
+	client := &http.Client{Timeout: cfg.Timeout}
+
+	// Test 1: Collect and send metrics
+	fmt.Print("1. Collecting system metrics... ")
+	payload, _, _, warn := collectMetrics(NetTotals{}, false)
+	if warn != nil {
+		fmt.Printf("⚠️  (with warnings: %v)\n", warn)
+	} else {
+		fmt.Println("✅")
+	}
+	fmt.Printf("   CPU: %.1f%% | Memory: %.1f%% | Disk: %.1f%%\n", payload.CPU, payload.Mem, payload.Disk)
+
+	fmt.Print("2. Sending metrics to backend... ")
+	if err := sendMetrics(client, cfg, payload); err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Println("✅ Success!")
+	}
+
+	// Test 2: Collect and send facts
+	fmt.Print("3. Collecting system facts... ")
+	facts, err := collectFacts()
+	if err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Println("✅")
+		fmt.Printf("   Hostname: %s | OS: %s %s | Cores: %d\n", facts.Hostname, facts.OSName, facts.OSVersion, facts.CPUCores)
+	}
+
+	fmt.Print("4. Sending facts to backend... ")
+	if err := sendFacts(client, cfg, facts); err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Println("✅ Success!")
+	}
+
+	fmt.Println()
+	fmt.Println("===================================")
+	fmt.Println("✅ Connection test completed!")
+	fmt.Println("If all tests passed, your agent is ready to run.")
+	fmt.Println("\nTo start the agent as a service:")
+	fmt.Printf("  sudo omnipulse-agent install --url %s --token <TOKEN>\n", cfg.BaseURL)
+	fmt.Println("  sudo omnipulse-agent start")
 }
 
 func isServiceCommand(cmd string) bool {
