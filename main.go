@@ -194,6 +194,25 @@ func runTestCommand(args []string, logger *log.Logger) {
 		fmt.Println("✅ Success!")
 	}
 
+	// Test 3: Collect and send services
+	fmt.Print("5. Discovering listening services... ")
+	services, err := collectServices()
+	if err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Printf("✅ Found %d services\n", len(services))
+		for _, svc := range services {
+			fmt.Printf("   :%d %s (%s) [%s]\n", svc.Port, svc.Service, svc.Process, svc.BindAddr)
+		}
+	}
+
+	fmt.Print("6. Sending services to backend... ")
+	if err := sendServices(client, cfg, services); err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Println("✅ Success!")
+	}
+
 	fmt.Println()
 	fmt.Println("===================================")
 	fmt.Println("✅ Connection test completed!")
@@ -286,6 +305,9 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 
 	// Send facts on startup
 	sendFactsToBackend(client, cfg, logger)
+	sendServicesToBackend(client, cfg, logger)
+	sendProcessesToBackend(client, cfg, logger)
+	sendWatchdogToBackend(client, cfg, logger)
 
 	// Track last facts sent time for periodic refresh
 	lastFactsSent := time.Now()
@@ -335,6 +357,9 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 		// Periodically refresh facts (every 5 minutes)
 		if time.Since(lastFactsSent) >= factsInterval {
 			sendFactsToBackend(client, cfg, logger)
+			sendServicesToBackend(client, cfg, logger)
+			sendProcessesToBackend(client, cfg, logger)
+			sendWatchdogToBackend(client, cfg, logger)
 			lastFactsSent = time.Now()
 		}
 
@@ -372,6 +397,21 @@ func sendFactsToBackend(client *http.Client, cfg Config, logger *log.Logger) {
 		logger.Printf("facts ingest failed: %v", err)
 	} else {
 		logger.Printf("facts sent: hostname=%s os=%s cores=%d", facts.Hostname, facts.OSName, facts.CPUCores)
+	}
+}
+
+// sendServicesToBackend collects and sends discovered services
+func sendServicesToBackend(client *http.Client, cfg Config, logger *log.Logger) {
+	services, err := collectServices()
+	if err != nil {
+		logger.Printf("service discovery error: %v", err)
+		return
+	}
+
+	if err := sendServices(client, cfg, services); err != nil {
+		logger.Printf("services ingest failed: %v", err)
+	} else {
+		logger.Printf("services sent: %d listening services detected", len(services))
 	}
 }
 
