@@ -1,3 +1,7 @@
+## [v1.2.155] - 2026-02-18
+### Changed
+- Automated release via script.
+
 ## [v1.2.154] - 2026-02-18
 ### Added
 - **Service Auto-Detection (M43-02)**: Scan listening ports via `gopsutil net.Connections`, 30+ well-known port mappings, process name resolution via `/proc/<pid>/comm`, send to `POST /api/ingest/server-services` on startup + every 5 min, discovery info in test command output
