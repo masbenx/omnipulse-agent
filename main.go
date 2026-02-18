@@ -307,6 +307,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	sendFactsToBackend(client, cfg, logger)
 	sendServicesToBackend(client, cfg, logger)
 	sendProcessesToBackend(client, cfg, logger)
+	sendWatchdogToBackend(client, cfg, logger)
 
 	// Track last facts sent time for periodic refresh
 	lastFactsSent := time.Now()
@@ -358,6 +359,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			sendFactsToBackend(client, cfg, logger)
 			sendServicesToBackend(client, cfg, logger)
 			sendProcessesToBackend(client, cfg, logger)
+			sendWatchdogToBackend(client, cfg, logger)
 			lastFactsSent = time.Now()
 		}
 
