@@ -306,6 +306,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	// Send facts on startup
 	sendFactsToBackend(client, cfg, logger)
 	sendServicesToBackend(client, cfg, logger)
+	sendProcessesToBackend(client, cfg, logger)
 
 	// Track last facts sent time for periodic refresh
 	lastFactsSent := time.Now()
@@ -356,6 +357,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 		if time.Since(lastFactsSent) >= factsInterval {
 			sendFactsToBackend(client, cfg, logger)
 			sendServicesToBackend(client, cfg, logger)
+			sendProcessesToBackend(client, cfg, logger)
 			lastFactsSent = time.Now()
 		}
 
