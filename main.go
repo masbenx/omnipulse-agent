@@ -194,8 +194,24 @@ func runTestCommand(args []string, logger *log.Logger) {
 		fmt.Println("✅ Success!")
 	}
 
-	// Test 3: Collect and send services
-	fmt.Print("5. Discovering listening services... ")
+	// Test 3: Collect and send inventory
+	fmt.Print("5. Collecting system inventory... ")
+	inventory, err := collectInventory()
+	if err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Printf("✅ Found %d packages, %d services\n", len(inventory.Packages), len(inventory.SystemdServices))
+	}
+
+	fmt.Print("6. Sending inventory to backend... ")
+	if err := sendInventory(client, cfg, inventory); err != nil {
+		fmt.Printf("❌ Failed: %v\n", err)
+	} else {
+		fmt.Println("✅ Success!")
+	}
+
+	// Test 4: Collect and send services
+	fmt.Print("7. Discovering listening services... ")
 	services, err := collectServices()
 	if err != nil {
 		fmt.Printf("❌ Failed: %v\n", err)
@@ -206,7 +222,7 @@ func runTestCommand(args []string, logger *log.Logger) {
 		}
 	}
 
-	fmt.Print("6. Sending services to backend... ")
+	fmt.Print("8. Sending services to backend... ")
 	if err := sendServices(client, cfg, services); err != nil {
 		fmt.Printf("❌ Failed: %v\n", err)
 	} else {
@@ -309,10 +325,13 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	sendProcessesToBackend(client, cfg, logger)
 	sendWatchdogToBackend(client, cfg, logger)
 	sendLogsToBackend(client, cfg, logger)
+	sendInventoryToBackend(client, cfg, logger)
 
 	// Track last facts sent time for periodic refresh
 	lastFactsSent := time.Now()
+	lastInventorySent := time.Now()
 	factsInterval := 5 * time.Minute
+	inventoryInterval := 1 * time.Hour
 
 	for {
 		if stopCh != nil {
@@ -363,6 +382,12 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			sendWatchdogToBackend(client, cfg, logger)
 			sendLogsToBackend(client, cfg, logger)
 			lastFactsSent = time.Now()
+		}
+
+		// Refresh inventory every 1 hour (packages rarely change)
+		if time.Since(lastInventorySent) >= inventoryInterval {
+			sendInventoryToBackend(client, cfg, logger)
+			lastInventorySent = time.Now()
 		}
 
 		sleepFor := nextSleep(cfg.Interval, failCount)
