@@ -234,3 +234,169 @@ func sendServices(client *http.Client, cfg Config, services []DiscoveredService)
 
 	return nil
 }
+
+// --- Log File Discovery ---
+
+// DiscoveredLogFile represents a .log file found on the server
+type DiscoveredLogFile struct {
+	Path       string `json:"path"`
+	SizeBytes  int64  `json:"size_bytes"`
+	ModifiedAt string `json:"modified_at"`
+}
+
+// LogDiscoveryPayload is sent to POST /api/ingest/server-log-discovery
+type LogDiscoveryPayload struct {
+	Files []DiscoveredLogFile `json:"files"`
+}
+
+// logScanDirs are the directories to scan for .log files
+var logScanDirs = []string{
+	"/var/log",
+	"/opt",
+	"/home",
+	"/srv",
+	"/tmp",
+}
+
+// collectLogFiles scans common directories for .log files
+func collectLogFiles() []DiscoveredLogFile {
+	var files []DiscoveredLogFile
+	seen := make(map[string]bool)
+
+	for _, root := range logScanDirs {
+		info, err := os.Stat(root)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		scanDir(root, 0, 3, &files, seen)
+	}
+
+	return files
+}
+
+// scanDir recursively scans a directory for .log files up to maxDepth
+func scanDir(dir string, depth, maxDepth int, files *[]DiscoveredLogFile, seen map[string]bool) {
+	if depth > maxDepth {
+		return
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return // skip unreadable dirs (permission denied, etc.)
+	}
+
+	for _, entry := range entries {
+		path := dir + "/" + entry.Name()
+
+		if entry.IsDir() {
+			// Skip common non-useful directories
+			name := entry.Name()
+			if name == "." || name == ".." || name == ".git" || name == "node_modules" || name == "__pycache__" {
+				continue
+			}
+			scanDir(path, depth+1, maxDepth, files, seen)
+			continue
+		}
+
+		// Only .log files
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		// Skip rotated/compressed files
+		if strings.HasSuffix(name, ".gz") || strings.HasSuffix(name, ".bz2") || strings.HasSuffix(name, ".xz") {
+			continue
+		}
+
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		// Skip empty files
+		if info.Size() == 0 {
+			continue
+		}
+
+		*files = append(*files, DiscoveredLogFile{
+			Path:       path,
+			SizeBytes:  info.Size(),
+			ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+}
+
+// sendLogDiscovery sends discovered log files to the backend
+func sendLogDiscovery(client *http.Client, cfg Config, logFiles []DiscoveredLogFile) error {
+	payload := LogDiscoveryPayload{Files: logFiles}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	endpoint := cfg.BaseURL + "/api/ingest/server-log-discovery"
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agent-Token", cfg.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("status=%d body=%s", resp.StatusCode, msg)
+	}
+
+	return nil
+}
+
+// fetchMonitoredLogPaths retrieves the list of enabled log file paths from the backend
+func fetchMonitoredLogPaths(client *http.Client, cfg Config) ([]string, error) {
+	endpoint := cfg.BaseURL + "/api/servers/me/monitored-logs"
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Agent-Token", cfg.Token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status=%d", resp.StatusCode)
+	}
+
+	var result struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Paths, nil
+}

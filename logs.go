@@ -40,21 +40,25 @@ type journalctlEntry struct {
 
 const maxLogEntries = 200
 
-// collectLogs gathers recent system logs from journalctl or syslog fallback
-func collectLogs() ([]LogEntry, error) {
-	entries, err := collectJournalctlLogs()
+// collectLogs gathers recent system logs from journalctl or syslog fallback.
+// sinceDuration controls how far back to look (e.g. 1*time.Minute for frequent polling).
+func collectLogs(since time.Duration) ([]LogEntry, error) {
+	entries, err := collectJournalctlLogs(since)
 	if err == nil && len(entries) > 0 {
 		return entries, nil
 	}
 
 	// Fallback: read /var/log/syslog or /var/log/messages
-	return collectSyslogFallback()
+	return collectSyslogFallback(since)
 }
 
-// collectJournalctlLogs reads recent logs from journalctl in JSON format
-func collectJournalctlLogs() ([]LogEntry, error) {
+// collectJournalctlLogs reads recent logs from journalctl in JSON format.
+// since controls how far back to look for new entries.
+func collectJournalctlLogs(since time.Duration) ([]LogEntry, error) {
+	// Convert duration to journalctl's --since format (e.g. "1 minutes ago")
+	sinceStr := fmt.Sprintf("%d seconds ago", int(since.Seconds()))
 	cmd := exec.Command("journalctl",
-		"--since", "5 minutes ago",
+		"--since", sinceStr,
 		"--output", "json",
 		"--no-pager",
 		"-n", strconv.Itoa(maxLogEntries),
@@ -120,8 +124,9 @@ func collectJournalctlLogs() ([]LogEntry, error) {
 	return entries, nil
 }
 
-// collectSyslogFallback reads the last lines from /var/log/syslog or /var/log/messages
-func collectSyslogFallback() ([]LogEntry, error) {
+// collectSyslogFallback reads the last lines from /var/log/syslog or /var/log/messages.
+// since controls how many lines to tail (shorter durations = fewer lines).
+func collectSyslogFallback(since time.Duration) ([]LogEntry, error) {
 	logFiles := []string{"/var/log/syslog", "/var/log/messages"}
 	var target string
 	for _, f := range logFiles {
@@ -134,7 +139,15 @@ func collectSyslogFallback() ([]LogEntry, error) {
 		return nil, fmt.Errorf("no syslog file found")
 	}
 
-	cmd := exec.Command("tail", "-n", "50", target)
+	// Scale tail lines by duration: ~10 lines per 30s, up to 100 for 5min
+	tailLines := int(since.Minutes()) * 20
+	if tailLines < 10 {
+		tailLines = 10
+	}
+	if tailLines > 200 {
+		tailLines = 200
+	}
+	cmd := exec.Command("tail", "-n", strconv.Itoa(tailLines), target)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("tail %s: %w", target, err)
@@ -222,9 +235,10 @@ func parseSyslogLine(line string) (service, message string) {
 	return
 }
 
-// sendLogsToBackend collects and sends system logs
-func sendLogsToBackend(client *http.Client, cfg Config, logger *log.Logger) {
-	entries, err := collectLogs()
+// sendLogsToBackend collects and sends system logs.
+// since controls how far back to look for new log entries.
+func sendLogsToBackend(client *http.Client, cfg Config, logger *log.Logger, since time.Duration) {
+	entries, err := collectLogs(since)
 	if err != nil {
 		logger.Printf("log collect error: %v", err)
 		return
@@ -267,4 +281,103 @@ func sendLogs(client *http.Client, cfg Config, payload LogIngestPayload) error {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// collectFileLogs tails the last lines of a specific log file.
+// since controls how many lines to tail (scaled by duration).
+func collectFileLogs(path string, since time.Duration) []LogEntry {
+	// Check if file exists and is readable
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+
+	// Scale tail lines: ~20 lines per minute of lookback
+	tailLines := int(since.Minutes()) * 20
+	if tailLines < 10 {
+		tailLines = 10
+	}
+	if tailLines > 100 {
+		tailLines = 100
+	}
+
+	cmd := exec.Command("tail", "-n", strconv.Itoa(tailLines), path)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+
+	hostname, _ := os.Hostname()
+	now := time.Now().UTC()
+
+	// Use filename without extension as service name
+	baseName := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		baseName = path[idx+1:]
+	}
+	// Strip .log extension
+	baseName = strings.TrimSuffix(baseName, ".log")
+
+	var entries []LogEntry
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// Detect basic log level from content
+		level := detectLogLevel(line)
+
+		entries = append(entries, LogEntry{
+			Timestamp: now.Format(time.RFC3339Nano),
+			Level:     level,
+			Service:   baseName,
+			Host:      hostname,
+			Message:   line,
+		})
+	}
+
+	return entries
+}
+
+// detectLogLevel does a simple keyword-based detection of log level
+func detectLogLevel(line string) string {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "error") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic"):
+		return "error"
+	case strings.Contains(lower, "warn"):
+		return "warning"
+	case strings.Contains(lower, "debug"):
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
+// sendFileLogsToBackend collects and sends log entries from monitored .log files
+func sendFileLogsToBackend(client *http.Client, cfg Config, logger *log.Logger, paths []string, since time.Duration) {
+	var allEntries []LogEntry
+
+	for _, p := range paths {
+		entries := collectFileLogs(p, since)
+		allEntries = append(allEntries, entries...)
+	}
+
+	if len(allEntries) == 0 {
+		return
+	}
+
+	// Cap total entries
+	if len(allEntries) > maxLogEntries {
+		allEntries = allEntries[len(allEntries)-maxLogEntries:]
+	}
+
+	payload := LogIngestPayload{Entries: allEntries}
+	if err := sendLogs(client, cfg, payload); err != nil {
+		logger.Printf("file log ingest failed: %v", err)
+	} else {
+		logger.Printf("file logs sent: %d entries from %d files", len(allEntries), len(paths))
+	}
 }
