@@ -1,6 +1,7 @@
 # binaries
 omnipulse-agent
 omnipulse-agent.exe
+omnipulse-agent-linux-amd64
 
 # build artifacts
 *.out
