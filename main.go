@@ -324,13 +324,19 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	sendServicesToBackend(client, cfg, logger)
 	sendProcessesToBackend(client, cfg, logger)
 	sendWatchdogToBackend(client, cfg, logger)
-	sendLogsToBackend(client, cfg, logger)
+	sendLogsToBackend(client, cfg, logger, 5*time.Minute) // initial: look back 5 min
 	sendInventoryToBackend(client, cfg, logger)
+	sendLogDiscoveryToBackend(client, cfg, logger)
+
+	// Fetch initial monitored log paths
+	monitoredLogPaths, _ := fetchMonitoredLogPaths(client, cfg)
 
 	// Track last facts sent time for periodic refresh
 	lastFactsSent := time.Now()
+	lastLogsSent := time.Now()
 	lastInventorySent := time.Now()
 	factsInterval := 5 * time.Minute
+	logsInterval := 30 * time.Second // logs sent more frequently for live tail
 	inventoryInterval := 1 * time.Hour
 
 	for {
@@ -374,14 +380,28 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			hasPrevIfaces = true
 		}
 
-		// Periodically refresh facts (every 5 minutes)
+		// Periodically refresh facts (every 5 minutes) — excludes logs
 		if time.Since(lastFactsSent) >= factsInterval {
 			sendFactsToBackend(client, cfg, logger)
 			sendServicesToBackend(client, cfg, logger)
 			sendProcessesToBackend(client, cfg, logger)
 			sendWatchdogToBackend(client, cfg, logger)
-			sendLogsToBackend(client, cfg, logger)
+			sendLogDiscoveryToBackend(client, cfg, logger)
+			// Refresh monitored paths from backend
+			if paths, err := fetchMonitoredLogPaths(client, cfg); err == nil {
+				monitoredLogPaths = paths
+			}
 			lastFactsSent = time.Now()
+		}
+
+		// Send logs more frequently (every 30 seconds) for live tail support
+		if time.Since(lastLogsSent) >= logsInterval {
+			sendLogsToBackend(client, cfg, logger, 1*time.Minute) // 1 min lookback with overlap
+			// Also tail monitored log files
+			if len(monitoredLogPaths) > 0 {
+				sendFileLogsToBackend(client, cfg, logger, monitoredLogPaths, 1*time.Minute)
+			}
+			lastLogsSent = time.Now()
 		}
 
 		// Refresh inventory every 1 hour (packages rarely change)
@@ -439,6 +459,16 @@ func sendServicesToBackend(client *http.Client, cfg Config, logger *log.Logger) 
 		logger.Printf("services ingest failed: %v", err)
 	} else {
 		logger.Printf("services sent: %d listening services detected", len(services))
+	}
+}
+
+// sendLogDiscoveryToBackend scans and sends discovered .log files to the backend
+func sendLogDiscoveryToBackend(client *http.Client, cfg Config, logger *log.Logger) {
+	logFiles := collectLogFiles()
+	if err := sendLogDiscovery(client, cfg, logFiles); err != nil {
+		logger.Printf("log discovery ingest failed: %v", err)
+	} else {
+		logger.Printf("log discovery sent: %d .log files found", len(logFiles))
 	}
 }
 
