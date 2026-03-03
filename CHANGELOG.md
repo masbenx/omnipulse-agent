@@ -1,3 +1,7 @@
+## [v1.2.165] - 2026-03-03
+### Changed
+- Automated release via script.
+
 ## [v1.2.164] - 2026-02-27
 ### Changed
 - Manual update for perhutani-dev-01 deployment.
