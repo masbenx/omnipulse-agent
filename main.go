@@ -382,6 +382,9 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			hasPrevIfaces = true
 		}
 
+		// Collect and send network flows (TCP connections with stats)
+		sendNetworkFlowsToBackend(client, cfg, logger)
+
 		// Periodically refresh facts (every 5 minutes) — excludes logs
 		if time.Since(lastFactsSent) >= factsInterval {
 			sendFactsToBackend(client, cfg, logger)
