@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/kardianos/service v1.2.2
+	github.com/lib/pq v1.11.2
 	github.com/shirou/gopsutil/v3 v3.24.5
 )
 
