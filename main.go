@@ -335,9 +335,11 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 	lastFactsSent := time.Now()
 	lastLogsSent := time.Now()
 	lastInventorySent := time.Now()
+	lastDBPolled := time.Now()
 	factsInterval := 5 * time.Minute
 	logsInterval := 30 * time.Second // logs sent more frequently for live tail
 	inventoryInterval := 1 * time.Hour
+	dbPollInterval := 1 * time.Minute
 
 	for {
 		if stopCh != nil {
@@ -380,6 +382,9 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			hasPrevIfaces = true
 		}
 
+		// Collect and send network flows (TCP connections with stats)
+		sendNetworkFlowsToBackend(client, cfg, logger)
+
 		// Periodically refresh facts (every 5 minutes) — excludes logs
 		if time.Since(lastFactsSent) >= factsInterval {
 			sendFactsToBackend(client, cfg, logger)
@@ -408,6 +413,12 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 		if time.Since(lastInventorySent) >= inventoryInterval {
 			sendInventoryToBackend(client, cfg, logger)
 			lastInventorySent = time.Now()
+		}
+
+		// Poll Database Metrics every minute
+		if time.Since(lastDBPolled) >= dbPollInterval {
+			pollAllDatabases(client, cfg, logger)
+			lastDBPolled = time.Now()
 		}
 
 		sleepFor := nextSleep(cfg.Interval, failCount)
