@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -96,7 +95,7 @@ func TestProcessesPayload_EmptyList(t *testing.T) {
 // --- sendProcesses HTTP Tests ---
 
 func TestSendProcesses_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := agentTestHTTPClient(func(r *http.Request) int {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
@@ -109,11 +108,10 @@ func TestSendProcesses_Success(t *testing.T) {
 		if r.Header.Get("X-Agent-Token") != "test-token" {
 			t.Errorf("expected X-Agent-Token test-token")
 		}
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+		return http.StatusOK
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "test-token"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "test-token"}
 	payload := ProcessesPayload{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Processes: []ProcessInfo{
@@ -121,52 +119,49 @@ func TestSendProcesses_Success(t *testing.T) {
 		},
 	}
 
-	err := sendProcesses(server.Client(), cfg, payload)
+	err := sendProcesses(client, cfg, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestSendProcesses_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusInternalServerError
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "tok"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "tok"}
 	payload := ProcessesPayload{Timestamp: "now"}
 
-	err := sendProcesses(server.Client(), cfg, payload)
+	err := sendProcesses(client, cfg, payload)
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}
 }
 
 func TestSendProcesses_Unauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusUnauthorized
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "bad"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "bad"}
 	payload := ProcessesPayload{Timestamp: "now"}
 
-	err := sendProcesses(server.Client(), cfg, payload)
+	err := sendProcesses(client, cfg, payload)
 	if err == nil {
 		t.Fatal("expected error on 401 response")
 	}
 }
 
 func TestSendProcesses_BadRequest(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(400)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusBadRequest
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "tok"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "tok"}
 	payload := ProcessesPayload{Timestamp: "now"}
 
-	err := sendProcesses(server.Client(), cfg, payload)
+	err := sendProcesses(client, cfg, payload)
 	if err == nil {
 		t.Fatal("expected error on 400 response")
 	}

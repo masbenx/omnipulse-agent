@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -185,7 +184,7 @@ func TestServiceDiscoveryPayload_JSONStructure(t *testing.T) {
 // --- sendServices HTTP Tests ---
 
 func TestSendServices_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := agentTestHTTPClient(func(r *http.Request) int {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
@@ -198,12 +197,11 @@ func TestSendServices_Success(t *testing.T) {
 		if r.Header.Get("X-Agent-Token") != "test-token" {
 			t.Errorf("expected X-Agent-Token test-token")
 		}
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+		return http.StatusOK
+	})
 
 	cfg := Config{
-		BaseURL: server.URL,
+		BaseURL: "http://omnipulse.test",
 		Token:   "test-token",
 		Timeout: 5 * time.Second,
 	}
@@ -211,34 +209,31 @@ func TestSendServices_Success(t *testing.T) {
 		{Port: 22, Protocol: "tcp", Process: "sshd", Service: "SSH"},
 	}
 
-	err := sendServices(server.Client(), cfg, services)
+	err := sendServices(client, cfg, services)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestSendServices_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-		w.Write([]byte("internal error"))
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusInternalServerError
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "tok", Timeout: 5 * time.Second}
-	err := sendServices(server.Client(), cfg, nil)
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "tok", Timeout: 5 * time.Second}
+	err := sendServices(client, cfg, nil)
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}
 }
 
 func TestSendServices_Unauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusUnauthorized
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "bad", Timeout: 5 * time.Second}
-	err := sendServices(server.Client(), cfg, nil)
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "bad", Timeout: 5 * time.Second}
+	err := sendServices(client, cfg, nil)
 	if err == nil {
 		t.Fatal("expected error on 401 response")
 	}

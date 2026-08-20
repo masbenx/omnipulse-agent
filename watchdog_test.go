@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -139,7 +138,7 @@ func TestWatchdogPayload_JSONStructure(t *testing.T) {
 // --- sendWatchdog HTTP Tests ---
 
 func TestSendWatchdog_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	client := agentTestHTTPClient(func(r *http.Request) int {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
@@ -152,47 +151,44 @@ func TestSendWatchdog_Success(t *testing.T) {
 		if r.Header.Get("X-Agent-Token") != "test-token" {
 			t.Errorf("expected X-Agent-Token test-token, got %q", r.Header.Get("X-Agent-Token"))
 		}
-		w.WriteHeader(200)
-	}))
-	defer server.Close()
+		return http.StatusOK
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "test-token"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "test-token"}
 	payload := WatchdogPayload{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Entries:   []WatchdogEntry{{Name: "test", Status: "running"}},
 	}
 
-	err := sendWatchdog(server.Client(), cfg, payload)
+	err := sendWatchdog(client, cfg, payload)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestSendWatchdog_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(500)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusInternalServerError
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "tok"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "tok"}
 	payload := WatchdogPayload{Timestamp: "now", Entries: nil}
 
-	err := sendWatchdog(server.Client(), cfg, payload)
+	err := sendWatchdog(client, cfg, payload)
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}
 }
 
 func TestSendWatchdog_Unauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
-	}))
-	defer server.Close()
+	client := agentTestHTTPClient(func(r *http.Request) int {
+		return http.StatusUnauthorized
+	})
 
-	cfg := Config{BaseURL: server.URL, Token: "bad-token"}
+	cfg := Config{BaseURL: "http://omnipulse.test", Token: "bad-token"}
 	payload := WatchdogPayload{Timestamp: "now", Entries: nil}
 
-	err := sendWatchdog(server.Client(), cfg, payload)
+	err := sendWatchdog(client, cfg, payload)
 	if err == nil {
 		t.Fatal("expected error on 401 response")
 	}
