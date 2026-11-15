@@ -17,19 +17,19 @@ func TestLoadConfig_RequiresURL(t *testing.T) {
 }
 
 func TestLoadConfig_RequiresToken(t *testing.T) {
-	_, err := loadConfig([]string{"-url", "http://localhost"})
+	_, err := loadConfig([]string{"-url", "https://api.omnipulse.cloud"})
 	if err == nil {
-		t.Fatal("expected error when AGENT_TOKEN is missing")
+		t.Fatal("expected error when X_AGENT_TOKEN is missing")
 	}
 }
 
 func TestLoadConfig_Success(t *testing.T) {
-	cfg, err := loadConfig([]string{"-url", "http://localhost:8080", "-token", "test-token"})
+	cfg, err := loadConfig([]string{"-url", "https://api.omnipulse.cloud", "-token", "test-token"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.BaseURL != "http://localhost:8080" {
-		t.Errorf("expected BaseURL 'http://localhost:8080', got %q", cfg.BaseURL)
+	if cfg.BaseURL != "https://api.omnipulse.cloud" {
+		t.Errorf("expected BaseURL 'https://api.omnipulse.cloud', got %q", cfg.BaseURL)
 	}
 	if cfg.Token != "test-token" {
 		t.Errorf("expected Token 'test-token', got %q", cfg.Token)
@@ -43,7 +43,7 @@ func TestLoadConfig_Success(t *testing.T) {
 }
 
 func TestLoadConfig_CustomInterval(t *testing.T) {
-	cfg, err := loadConfig([]string{"-url", "http://localhost", "-token", "tok", "-interval", "30"})
+	cfg, err := loadConfig([]string{"-url", "https://api.omnipulse.cloud", "-token", "tok", "-interval", "30"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,12 +53,33 @@ func TestLoadConfig_CustomInterval(t *testing.T) {
 }
 
 func TestLoadConfig_TrimsTrailingSlash(t *testing.T) {
-	cfg, err := loadConfig([]string{"-url", "http://localhost:8080/", "-token", "tok"})
+	cfg, err := loadConfig([]string{"-url", "https://api.omnipulse.cloud:8443/", "-token", "tok"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.BaseURL != "http://localhost:8080" {
+	if cfg.BaseURL != "https://api.omnipulse.cloud:8443" {
 		t.Errorf("expected trailing slash removed, got %q", cfg.BaseURL)
+	}
+}
+
+func TestLoadConfig_RejectsHTTPOutsideDevMode(t *testing.T) {
+	t.Setenv("OMNIPULSE_ENV", "")
+	t.Setenv("APP_ENV", "")
+	t.Setenv("ENV", "")
+	if _, err := loadConfig([]string{"-url", "http://localhost:8080", "-token", "tok"}); err == nil {
+		t.Fatal("expected error for http:// URL outside DEV mode")
+	}
+}
+
+func TestLoadConfig_AllowsHTTPInDevModeAndXAgentToken(t *testing.T) {
+	t.Setenv("OMNIPULSE_ENV", "dev")
+	t.Setenv("X_AGENT_TOKEN", "x-agent-tok")
+	cfg, err := loadConfig([]string{"-url", "http://localhost:8080"})
+	if err != nil {
+		t.Fatalf("unexpected error in dev mode: %v", err)
+	}
+	if cfg.Token != "x-agent-tok" {
+		t.Errorf("expected X_AGENT_TOKEN value, got %q", cfg.Token)
 	}
 }
 
