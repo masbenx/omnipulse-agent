@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -99,9 +101,26 @@ func pollAllDatabases(client *http.Client, cfg Config, logger *log.Logger) {
 	}
 }
 
+func quoteLibpqValue(v string) string {
+	escaped := strings.ReplaceAll(v, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `'`, `\'`)
+	return "'" + escaped + "'"
+}
+
 func pollPostgres(client *http.Client, cfg Config, logger *log.Logger, dbCfg DBInstanceConfigItem) {
-	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
-		dbCfg.Host, dbCfg.Port, dbCfg.Username, dbCfg.Password, dbCfg.DatabaseName)
+	sslMode := strings.TrimSpace(os.Getenv("OMNIPULSE_DBM_SSLMODE"))
+	if sslMode == "" {
+		sslMode = "require"
+	}
+	dsn := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s connect_timeout=5",
+		quoteLibpqValue(dbCfg.Host),
+		dbCfg.Port,
+		quoteLibpqValue(dbCfg.Username),
+		quoteLibpqValue(dbCfg.Password),
+		quoteLibpqValue(dbCfg.DatabaseName),
+		quoteLibpqValue(sslMode),
+	)
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
