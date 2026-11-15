@@ -2,6 +2,10 @@
 omnipulse-agent
 omnipulse-agent.exe
 omnipulse-agent-linux-amd64
+omnipulse-watcher
+
+# local watcher runner (contains local tokens)
+run_watchers.sh
 
 # build artifacts
 *.out

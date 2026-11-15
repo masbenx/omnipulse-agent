@@ -155,7 +155,7 @@ func runTestCommand(args []string, logger *log.Logger) {
 	}
 
 	fmt.Printf("📡 Backend URL: %s\n", cfg.BaseURL)
-	fmt.Printf("🔑 Token: %s***\n", cfg.Token[:min(8, len(cfg.Token))])
+	fmt.Println("🔑 Token: [REDACTED]")
 	fmt.Println()
 
 	client := &http.Client{Timeout: cfg.Timeout}
@@ -284,6 +284,10 @@ func buildServiceConfig(cmd string, args []string) (*serviceConfig, error) {
 			return nil, err
 		}
 		svcCfg.Arguments = buildRunArgs(cfg)
+		svcCfg.EnvVars = map[string]string{
+			"OMNIPULSE_URL": cfg.BaseURL,
+			"X_AGENT_TOKEN": cfg.Token,
+		}
 		return &serviceConfig{
 			svc: svcCfg,
 			program: &program{
@@ -301,7 +305,6 @@ func buildRunArgs(cfg Config) []string {
 	args := []string{
 		"run",
 		"--url", cfg.BaseURL,
-		"--token", cfg.Token,
 	}
 	if cfg.Interval > 0 {
 		args = append(args, "--interval", strconv.Itoa(int(cfg.Interval.Seconds())))
@@ -523,19 +526,25 @@ func loadConfig(args []string) (Config, error) {
 	fs := flag.NewFlagSet("omnipulse-agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	flagURL := fs.String("url", "", "Base URL (env OMNIPULSE_URL)")
-	flagToken := fs.String("token", "", "Agent token (env AGENT_TOKEN)")
+	flagToken := fs.String("token", "", "Agent token (env X_AGENT_TOKEN or AGENT_TOKEN)")
 	flagInterval := fs.Int("interval", 0, "Interval in seconds (env INTERVAL_SECONDS)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	baseURL := strings.TrimSpace(firstNonEmpty(*flagURL, os.Getenv("OMNIPULSE_URL")))
-	token := strings.TrimSpace(firstNonEmpty(*flagToken, os.Getenv("AGENT_TOKEN")))
+	token := strings.TrimSpace(firstNonEmpty(*flagToken, os.Getenv("X_AGENT_TOKEN"), os.Getenv("AGENT_TOKEN")))
 	if baseURL == "" {
 		return Config{}, errors.New("OMNIPULSE_URL is required")
 	}
+	isDevMode := strings.EqualFold(os.Getenv("OMNIPULSE_ENV"), "dev") ||
+		strings.EqualFold(os.Getenv("APP_ENV"), "dev") ||
+		strings.EqualFold(os.Getenv("ENV"), "dev")
+	if !strings.HasPrefix(strings.ToLower(baseURL), "https://") && !isDevMode {
+		return Config{}, errors.New("OMNIPULSE_URL must use https:// outside DEV mode (set OMNIPULSE_ENV=dev for local http)")
+	}
 	if token == "" {
-		return Config{}, errors.New("AGENT_TOKEN is required")
+		return Config{}, errors.New("X_AGENT_TOKEN is required")
 	}
 
 	intervalSeconds := 10
