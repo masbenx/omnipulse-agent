@@ -1,3 +1,9 @@
+## [v1.2.169] - 2026-11-16
+### Added
+- Add native RESP TCP Redis polling (`connected_clients`, `used_memory`, `keyspace_hits/misses`, `evicted_keys`, `SLOWLOG GET`) in `dbm.go`.
+- Add SeaweedFS / Object Storage local polling (`storage.go`) via `/api/ingest/storage-instances/config` and `/api/ingest/storage-metrics`.
+- Add Docker container stats & multiplexed container log tailing (`docker.go`) via `/var/run/docker.sock`.
+
 ## [v1.2.168] - 2026-11-15
 ### Changed
 - Automated release via script.

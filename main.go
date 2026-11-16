@@ -394,6 +394,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			sendServicesToBackend(client, cfg, logger)
 			sendProcessesToBackend(client, cfg, logger)
 			sendWatchdogToBackend(client, cfg, logger)
+			sendDockerToBackend(client, cfg, logger)
 			sendLogDiscoveryToBackend(client, cfg, logger)
 			// Refresh monitored paths from backend
 			if paths, err := fetchMonitoredLogPaths(client, cfg); err == nil {
@@ -409,6 +410,7 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			if len(monitoredLogPaths) > 0 {
 				sendFileLogsToBackend(client, cfg, logger, monitoredLogPaths, 1*time.Minute)
 			}
+			sendDockerLogsToBackend(client, cfg, logger, 1*time.Minute)
 			lastLogsSent = time.Now()
 		}
 
@@ -418,9 +420,10 @@ func runAgent(cfg Config, logger *log.Logger, stopCh <-chan struct{}) {
 			lastInventorySent = time.Now()
 		}
 
-		// Poll Database Metrics every minute
+		// Poll Database & Storage Metrics every minute
 		if time.Since(lastDBPolled) >= dbPollInterval {
 			pollAllDatabases(client, cfg, logger)
+			pollAllStorage(client, cfg, logger)
 			lastDBPolled = time.Now()
 		}
 

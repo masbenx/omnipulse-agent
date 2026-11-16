@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,8 +99,11 @@ func pollAllDatabases(client *http.Client, cfg Config, logger *log.Logger) {
 	}
 
 	for _, dbCfg := range configs {
-		if dbCfg.Engine == "postgresql" {
+		switch strings.ToLower(strings.TrimSpace(dbCfg.Engine)) {
+		case "postgresql", "postgres":
 			go pollPostgres(client, cfg, logger, dbCfg)
+		case "redis":
+			go pollRedis(client, cfg, logger, dbCfg)
 		}
 	}
 }
@@ -249,4 +256,239 @@ func sendSlowQueries(client *http.Client, cfg Config, logger *log.Logger, reqs [
 		return
 	}
 	defer resp.Body.Close()
+}
+
+func pollRedis(client *http.Client, cfg Config, logger *log.Logger, dbCfg DBInstanceConfigItem) {
+	port := dbCfg.Port
+	if port <= 0 {
+		port = 6379
+	}
+	addr := net.JoinHostPort(dbCfg.Host, strconv.Itoa(port))
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		logger.Printf("redis dial error [%s]: %v", dbCfg.Name, err)
+		return
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	reader := bufio.NewReader(conn)
+
+	if dbCfg.Password != "" {
+		var authCmd []string
+		if dbCfg.Username != "" && !strings.EqualFold(dbCfg.Username, "default") {
+			authCmd = []string{"AUTH", dbCfg.Username, dbCfg.Password}
+		} else {
+			authCmd = []string{"AUTH", dbCfg.Password}
+		}
+		if _, err := redisExec(conn, reader, authCmd...); err != nil {
+			logger.Printf("redis auth error [%s]: %v", dbCfg.Name, err)
+			return
+		}
+	}
+
+	infoStr, err := redisExec(conn, reader, "INFO")
+	if err != nil {
+		logger.Printf("redis info error [%s]: %v", dbCfg.Name, err)
+		return
+	}
+
+	activeConn := int(parseRedisInfoInt64(infoStr, "connected_clients:"))
+	maxClients := int(parseRedisInfoInt64(infoStr, "maxclients:"))
+	if maxClients <= 0 {
+		maxClients = 10000
+	}
+	hits := parseRedisInfoInt64(infoStr, "keyspace_hits:")
+	misses := parseRedisInfoInt64(infoStr, "keyspace_misses:")
+	evicted := parseRedisInfoInt64(infoStr, "evicted_keys:")
+	totalConns := parseRedisInfoInt64(infoStr, "total_connections_received:")
+	totalCmds := parseRedisInfoInt64(infoStr, "total_commands_processed:")
+	usedMem := parseRedisInfoInt64(infoStr, "used_memory:")
+	usedMemRSS := parseRedisInfoInt64(infoStr, "used_memory_rss:")
+
+	var hitRatio float64
+	if hits+misses > 0 {
+		hitRatio = float64(hits) / float64(hits+misses)
+	}
+
+	metric := DBMetricIngestReq{
+		Timestamp:            time.Now().UTC().Format(time.RFC3339Nano),
+		DatabaseInstanceID:   dbCfg.ID,
+		ActiveConnections:    activeConn,
+		MaxConnections:       maxClients,
+		CacheHitRatio:        hitRatio,
+		TransactionsCommit:   totalCmds,
+		TransactionsRollback: evicted,
+		RowsRead:             hits,
+		RowsWritten:          misses,
+		AdditionalMetrics: map[string]any{
+			"used_memory":       usedMem,
+			"used_memory_rss":   usedMemRSS,
+			"total_connections": totalConns,
+			"total_commands":    totalCmds,
+			"evicted_keys":      evicted,
+			"keyspace_hits":     hits,
+			"keyspace_misses":   misses,
+		},
+	}
+
+	sendDBMetrics(client, cfg, logger, metric)
+
+	if slowEntries, err := redisSlowLog(conn, reader, 20); err == nil && len(slowEntries) > 0 {
+		reqs := make([]SlowQueryIngestReq, 0, len(slowEntries))
+		for _, se := range slowEntries {
+			ms := float64(se.DurationMicros) / 1000.0
+			reqs = append(reqs, SlowQueryIngestReq{
+				Timestamp:          se.Timestamp.UTC().Format(time.RFC3339Nano),
+				DatabaseInstanceID: dbCfg.ID,
+				QueryText:          se.Command,
+				QueryHash:          fmt.Sprintf("%d", se.ID),
+				DBUser:             "redis",
+				Calls:              1,
+				TotalTimeMs:        ms,
+				MinTimeMs:          ms,
+				MaxTimeMs:          ms,
+				MeanTimeMs:         ms,
+				RowsReturned:       1,
+			})
+		}
+		sendSlowQueries(client, cfg, logger, reqs)
+	}
+}
+
+func redisWriteCmd(conn net.Conn, args ...string) error {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "*%d\r\n", len(args))
+	for _, a := range args {
+		fmt.Fprintf(&buf, "$%d\r\n%s\r\n", len(a), a)
+	}
+	_, err := conn.Write(buf.Bytes())
+	return err
+}
+
+func redisReadValue(r *bufio.Reader) (any, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	if len(line) == 0 {
+		return nil, io.EOF
+	}
+	prefix := line[0]
+	rest := line[1:]
+	switch prefix {
+	case '+':
+		return rest, nil
+	case '-':
+		return nil, fmt.Errorf("redis error: %s", rest)
+	case ':':
+		v, err := strconv.ParseInt(rest, 10, 64)
+		return v, err
+	case '$':
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			return nil, err
+		}
+		if n < 0 {
+			return "", nil
+		}
+		buf := make([]byte, n+2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, err
+		}
+		return string(buf[:n]), nil
+	case '*':
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			return nil, err
+		}
+		if n < 0 {
+			return []any(nil), nil
+		}
+		arr := make([]any, 0, n)
+		for i := 0; i < n; i++ {
+			v, err := redisReadValue(r)
+			if err != nil {
+				return nil, err
+			}
+			arr = append(arr, v)
+		}
+		return arr, nil
+	default:
+		return rest, nil
+	}
+}
+
+func redisExec(conn net.Conn, r *bufio.Reader, args ...string) (string, error) {
+	if err := redisWriteCmd(conn, args...); err != nil {
+		return "", err
+	}
+	val, err := redisReadValue(r)
+	if err != nil {
+		return "", err
+	}
+	if s, ok := val.(string); ok {
+		return s, nil
+	}
+	return fmt.Sprintf("%v", val), nil
+}
+
+type redisSlowLogItem struct {
+	ID             int64
+	Timestamp      time.Time
+	DurationMicros int64
+	Command        string
+}
+
+func redisSlowLog(conn net.Conn, r *bufio.Reader, count int) ([]redisSlowLogItem, error) {
+	if err := redisWriteCmd(conn, "SLOWLOG", "GET", strconv.Itoa(count)); err != nil {
+		return nil, err
+	}
+	val, err := redisReadValue(r)
+	if err != nil {
+		return nil, err
+	}
+	arr, ok := val.([]any)
+	if !ok {
+		return nil, nil
+	}
+	var out []redisSlowLogItem
+	for _, raw := range arr {
+		entry, ok := raw.([]any)
+		if !ok || len(entry) < 4 {
+			continue
+		}
+		id, _ := entry[0].(int64)
+		tsSec, _ := entry[1].(int64)
+		dur, _ := entry[2].(int64)
+		var cmdParts []string
+		if cmdArr, ok := entry[3].([]any); ok {
+			for _, p := range cmdArr {
+				if s, ok := p.(string); ok {
+					cmdParts = append(cmdParts, s)
+				}
+			}
+		}
+		out = append(out, redisSlowLogItem{
+			ID:             id,
+			Timestamp:      time.Unix(tsSec, 0),
+			DurationMicros: dur,
+			Command:        strings.Join(cmdParts, " "),
+		})
+	}
+	return out, nil
+}
+
+func parseRedisInfoInt64(info, prefix string) int64 {
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			raw := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+				return v
+			}
+		}
+	}
+	return 0
 }
