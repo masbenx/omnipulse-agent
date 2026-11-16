@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -47,6 +48,7 @@ type DBMetricIngestReq struct {
 	RowsRead              int64          `json:"rows_read"`
 	RowsWritten           int64          `json:"rows_written"`
 	AdditionalMetrics     map[string]any `json:"additional_metrics"`
+	ArchitectureMetadata  map[string]any `json:"architecture_metadata,omitempty"`
 }
 
 type SlowQueryIngestReq struct {
@@ -185,6 +187,13 @@ func pollPostgres(client *http.Client, cfg Config, logger *log.Logger, dbCfg DBI
 		Deadlocks:            deadlocks,
 		RowsRead:             tupReturned + tupFetched,
 		RowsWritten:          tupInserted + tupUpdated + tupDeleted,
+	}
+
+	if shouldCollectArchitecture(dbCfg.ID) {
+		if arch := collectPostgresArchitecture(ctx, db, maxConns); len(arch) > 0 {
+			metric.ArchitectureMetadata = arch
+			markArchitectureCollected(dbCfg.ID)
+		}
 	}
 
 	sendDBMetrics(client, cfg, logger, metric)
@@ -330,6 +339,13 @@ func pollRedis(client *http.Client, cfg Config, logger *log.Logger, dbCfg DBInst
 			"keyspace_hits":     hits,
 			"keyspace_misses":   misses,
 		},
+	}
+
+	if shouldCollectArchitecture(dbCfg.ID) {
+		if arch := collectRedisArchitecture(infoStr, conn, reader); len(arch) > 0 {
+			metric.ArchitectureMetadata = arch
+			markArchitectureCollected(dbCfg.ID)
+		}
 	}
 
 	sendDBMetrics(client, cfg, logger, metric)
@@ -491,4 +507,305 @@ func parseRedisInfoInt64(info, prefix string) int64 {
 		}
 	}
 	return 0
+}
+
+var (
+	archMu            sync.Mutex
+	archLastCollected = make(map[int]time.Time)
+)
+
+const archCollectInterval = 5 * time.Minute
+
+func shouldCollectArchitecture(instanceID int) bool {
+	archMu.Lock()
+	defer archMu.Unlock()
+	last, ok := archLastCollected[instanceID]
+	if !ok {
+		return true
+	}
+	return time.Since(last) >= archCollectInterval
+}
+
+func markArchitectureCollected(instanceID int) {
+	archMu.Lock()
+	defer archMu.Unlock()
+	archLastCollected[instanceID] = time.Now()
+}
+
+type pgArchTable struct {
+	Schema      string         `json:"schema"`
+	Name        string         `json:"name"`
+	RowEstimate int64          `json:"row_estimate"`
+	TotalBytes  int64          `json:"total_bytes"`
+	Columns     []pgArchColumn `json:"columns"`
+}
+
+type pgArchColumn struct {
+	Name       string `json:"name"`
+	DataType   string `json:"data_type"`
+	IsNullable bool   `json:"is_nullable"`
+	IsPK       bool   `json:"is_pk"`
+}
+
+type pgArchRelation struct {
+	ConstraintName string `json:"constraint_name"`
+	FromTable      string `json:"from_table"`
+	FromColumn     string `json:"from_column"`
+	ToTable        string `json:"to_table"`
+	ToColumn       string `json:"to_column"`
+}
+
+type pgArchExtension struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+func collectPostgresArchitecture(ctx context.Context, db *sql.DB, maxConns int) map[string]any {
+	var pgVersion string
+	_ = db.QueryRowContext(ctx, "SELECT version()").Scan(&pgVersion)
+
+	var dbSizeBytes int64
+	_ = db.QueryRowContext(ctx, "SELECT pg_database_size(current_database())").Scan(&dbSizeBytes)
+
+	var totalViews, totalIndexes int
+	_ = db.QueryRowContext(ctx, "SELECT count(*) FROM information_schema.views WHERE table_schema NOT IN ('pg_catalog', 'information_schema')").Scan(&totalViews)
+	_ = db.QueryRowContext(ctx, "SELECT count(*) FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog', 'information_schema')").Scan(&totalIndexes)
+
+	extensions := make([]pgArchExtension, 0)
+	if extRows, err := db.QueryContext(ctx, "SELECT extname, extversion FROM pg_extension ORDER BY extname"); err == nil {
+		defer extRows.Close()
+		for extRows.Next() {
+			var name, ver string
+			if err := extRows.Scan(&name, &ver); err == nil {
+				extensions = append(extensions, pgArchExtension{Name: name, Version: ver})
+			}
+		}
+	}
+
+	pkSet := make(map[string]bool)
+	if pkRows, err := db.QueryContext(ctx, `
+		SELECT tc.table_schema, tc.table_name, kcu.column_name
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name = kcu.constraint_name
+		 AND tc.table_schema = kcu.table_schema
+		WHERE tc.constraint_type = 'PRIMARY KEY'
+		  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+	`); err == nil {
+		defer pkRows.Close()
+		for pkRows.Next() {
+			var schema, table, col string
+			if err := pkRows.Scan(&schema, &table, &col); err == nil {
+				pkSet[schema+"."+table+"."+col] = true
+			}
+		}
+	}
+
+	colMap := make(map[string][]pgArchColumn)
+	if colRows, err := db.QueryContext(ctx, `
+		SELECT table_schema, table_name, column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY table_schema, table_name, ordinal_position
+	`); err == nil {
+		defer colRows.Close()
+		for colRows.Next() {
+			var schema, table, col, dtype, nullable string
+			if err := colRows.Scan(&schema, &table, &col, &dtype, &nullable); err == nil {
+				key := schema + "." + table
+				colMap[key] = append(colMap[key], pgArchColumn{
+					Name:       col,
+					DataType:   dtype,
+					IsNullable: strings.EqualFold(nullable, "YES"),
+					IsPK:       pkSet[key+"."+col],
+				})
+			}
+		}
+	}
+
+	tables := make([]pgArchTable, 0)
+	var totalTables int
+	_ = db.QueryRowContext(ctx, "SELECT count(*) FROM pg_stat_user_tables").Scan(&totalTables)
+
+	if tblRows, err := db.QueryContext(ctx, `
+		SELECT schemaname, relname, COALESCE(n_live_tup, 0), pg_total_relation_size(relid)
+		FROM pg_stat_user_tables
+		ORDER BY pg_total_relation_size(relid) DESC, relname ASC
+		LIMIT 60
+	`); err == nil {
+		defer tblRows.Close()
+		for tblRows.Next() {
+			var schema, name string
+			var rowEst, totalBytes int64
+			if err := tblRows.Scan(&schema, &name, &rowEst, &totalBytes); err == nil {
+				key := schema + "." + name
+				cols := colMap[key]
+				if cols == nil {
+					cols = []pgArchColumn{}
+				}
+				tables = append(tables, pgArchTable{
+					Schema:      schema,
+					Name:        name,
+					RowEstimate: rowEst,
+					TotalBytes:  totalBytes,
+					Columns:     cols,
+				})
+			}
+		}
+	}
+
+	relations := make([]pgArchRelation, 0)
+	if relRows, err := db.QueryContext(ctx, `
+		SELECT tc.constraint_name,
+		       tc.table_schema || '.' || tc.table_name AS from_table,
+		       kcu.column_name AS from_column,
+		       ccu.table_schema || '.' || ccu.table_name AS to_table,
+		       ccu.column_name AS to_column
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name = kcu.constraint_name
+		 AND tc.table_schema = kcu.table_schema
+		JOIN information_schema.constraint_column_usage ccu
+		  ON ccu.constraint_name = tc.constraint_name
+		 AND ccu.table_schema = tc.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+		  AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY from_table, kcu.column_name
+		LIMIT 200
+	`); err == nil {
+		defer relRows.Close()
+		for relRows.Next() {
+			var cname, fromT, fromC, toT, toC string
+			if err := relRows.Scan(&cname, &fromT, &fromC, &toT, &toC); err == nil {
+				relations = append(relations, pgArchRelation{
+					ConstraintName: cname,
+					FromTable:      fromT,
+					FromColumn:     fromC,
+					ToTable:        toT,
+					ToColumn:       toC,
+				})
+			}
+		}
+	}
+
+	if totalTables == 0 {
+		totalTables = len(tables)
+	}
+
+	return map[string]any{
+		"engine":              "postgresql",
+		"version":             pgVersion,
+		"database_size_bytes": dbSizeBytes,
+		"max_connections":     maxConns,
+		"total_tables":        totalTables,
+		"total_views":         totalViews,
+		"total_indexes":       totalIndexes,
+		"extensions":          extensions,
+		"tables":              tables,
+		"relations":           relations,
+		"collected_at":        time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func parseRedisInfoMap(info string) map[string]string {
+	out := make(map[string]string)
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.IndexByte(line, ':'); idx > 0 {
+			k := strings.TrimSpace(line[:idx])
+			v := strings.TrimSpace(line[idx+1:])
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func collectRedisArchitecture(infoStr string, conn net.Conn, reader *bufio.Reader) map[string]any {
+	info := parseRedisInfoMap(infoStr)
+
+	mode := info["redis_mode"]
+	if mode == "" {
+		mode = "standalone"
+	}
+	role := info["role"]
+	if role == "" {
+		role = "master"
+	}
+	connectedSlaves, _ := strconv.ParseInt(info["connected_slaves"], 10, 64)
+	maxMemoryBytes, _ := strconv.ParseInt(info["maxmemory"], 10, 64)
+	uptimeSeconds, _ := strconv.ParseInt(info["uptime_in_seconds"], 10, 64)
+	rdbLastSaveTime, _ := strconv.ParseInt(info["rdb_last_save_time"], 10, 64)
+	rdbChanges, _ := strconv.ParseInt(info["rdb_changes_since_last_save"], 10, 64)
+	aofEnabled := info["aof_enabled"] == "1"
+	rdbEnabled := info["rdb_last_bgsave_status"] != "" || info["rdb_last_save_time"] != ""
+
+	maxMemoryPolicy := info["maxmemory_policy"]
+	if maxMemoryPolicy == "" {
+		if err := redisWriteCmd(conn, "CONFIG", "GET", "maxmemory-policy"); err == nil {
+			if val, err := redisReadValue(reader); err == nil {
+				if arr, ok := val.([]any); ok && len(arr) >= 2 {
+					if s, ok := arr[1].(string); ok {
+						maxMemoryPolicy = s
+					}
+				}
+			}
+		}
+	}
+
+	type redisKeyspace struct {
+		DB     string `json:"db"`
+		Keys   int64  `json:"keys"`
+		Expires int64 `json:"expires"`
+		AvgTTL int64  `json:"avg_ttl"`
+	}
+	keyspaces := make([]redisKeyspace, 0)
+	var totalKeys int64
+	for k, v := range info {
+		if !strings.HasPrefix(k, "db") || len(k) < 3 {
+			continue
+		}
+		if _, err := strconv.Atoi(k[2:]); err != nil {
+			continue
+		}
+		ks := redisKeyspace{DB: k}
+		for _, part := range strings.Split(v, ",") {
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			val, _ := strconv.ParseInt(kv[1], 10, 64)
+			switch kv[0] {
+			case "keys":
+				ks.Keys = val
+			case "expires":
+				ks.Expires = val
+			case "avg_ttl":
+				ks.AvgTTL = val
+			}
+		}
+		totalKeys += ks.Keys
+		keyspaces = append(keyspaces, ks)
+	}
+
+	return map[string]any{
+		"engine":                "redis",
+		"version":               info["redis_version"],
+		"mode":                  mode,
+		"role":                  role,
+		"os":                    info["os"],
+		"uptime_seconds":        uptimeSeconds,
+		"connected_slaves":      connectedSlaves,
+		"aof_enabled":           aofEnabled,
+		"rdb_enabled":           rdbEnabled,
+		"rdb_last_save_time":    rdbLastSaveTime,
+		"rdb_changes_unsaved":   rdbChanges,
+		"maxmemory_bytes":       maxMemoryBytes,
+		"maxmemory_policy":      maxMemoryPolicy,
+		"total_keys":            totalKeys,
+		"keyspaces":             keyspaces,
+		"collected_at":          time.Now().UTC().Format(time.RFC3339),
+	}
 }
