@@ -119,7 +119,7 @@ func collectSeaweedFSMetrics(localClient *http.Client, st StorageConfigItem) Sto
 	}
 
 	resp, err := localClient.Get(masterURL + "/dir/status")
-	metric.LatencyMs = float64(time.Since(start).Milliseconds())
+	metric.LatencyMs = float64(time.Since(start).Microseconds()) / 1000.0
 	if err != nil {
 		metric.ErrorMessage = err.Error()
 		return metric
@@ -182,7 +182,9 @@ func collectSeaweedFSMetrics(localClient *http.Client, st StorageConfigItem) Sto
 		cResp.Body.Close()
 	}
 
-	// Query volume server /status for disk usage if reachable
+	// Query volume server /status for disk usage & volume/file details if reachable
+	var volFileCount int64
+	var readOnlyCount int
 	for _, dnURL := range dataNodeURLs {
 		target := dnURL
 		if !strings.HasPrefix(target, "http") {
@@ -195,6 +197,10 @@ func collectSeaweedFSMetrics(localClient *http.Client, st StorageConfigItem) Sto
 					Used int64 `json:"used"`
 					Free int64 `json:"free"`
 				} `json:"DiskStatuses"`
+				Volumes []struct {
+					FileCount int64 `json:"FileCount"`
+					ReadOnly  bool  `json:"ReadOnly"`
+				} `json:"Volumes"`
 			}
 			if err := json.NewDecoder(vResp.Body).Decode(&vStatus); err == nil {
 				for _, d := range vStatus.DiskStatuses {
@@ -202,9 +208,22 @@ func collectSeaweedFSMetrics(localClient *http.Client, st StorageConfigItem) Sto
 					metric.UsedBytes += d.Used
 					metric.FreeBytes += d.Free
 				}
+				for _, v := range vStatus.Volumes {
+					volFileCount += v.FileCount
+					if v.ReadOnly {
+						readOnlyCount++
+					}
+				}
 			}
 			vResp.Body.Close()
 		}
+	}
+	if metric.FileCount == 0 && volFileCount > 0 {
+		metric.FileCount = volFileCount
+	}
+	metric.ReadOnlyVolumes = readOnlyCount
+	if metric.VolumeCount >= readOnlyCount {
+		metric.ActiveVolumes = metric.VolumeCount - readOnlyCount
 	}
 
 	if st.S3EndpointURL != "" {
