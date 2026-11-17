@@ -1,3 +1,7 @@
+## [v1.2.170] - 2026-11-17
+### Changed
+- Automated release via script.
+
 ## [v1.2.169] - 2026-11-16
 ### Added
 - Add native RESP TCP Redis polling (`connected_clients`, `used_memory`, `keyspace_hits/misses`, `evicted_keys`, `SLOWLOG GET`) in `dbm.go`.
